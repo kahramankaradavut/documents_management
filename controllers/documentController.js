@@ -1,8 +1,7 @@
 const pool = require('../db');
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
-
+const { readDocxFile } = require('../docxHelper'); // Dokx içeriği okuma yardımcı fonksiyonunu ekleyin
 
 // Multer ayarları
 const storage = multer.diskStorage({
@@ -24,7 +23,7 @@ const createDocument = async (req, res) => {
   } = req.body;
   const { mimetype, size, filename } = req.file;
   const fileUrl = `/uploads/${filename}`;
-  
+
   try {
     await pool.query("BEGIN");
 
@@ -61,24 +60,6 @@ const createDocument = async (req, res) => {
   }
 };
 
-// Doküman alma
-const getDocument = async (req, res) => {
-  const { id } = req.params;
-  try {
-    const result = await pool.query(
-      `SELECT * FROM dokuman WHERE id = $1 AND is_deleted = false`, [id]
-    );
-    if (result.rows.length > 0) {
-      res.status(200).json(result.rows[0]);
-    } else {
-      res.status(404).json({ error: "Document not found" });
-    }
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Internal Server Error" });
-  }
-};
-
 // Doküman güncelleme
 const updateDocument = async (req, res) => {
   const { id } = req.params;
@@ -92,6 +73,7 @@ const updateDocument = async (req, res) => {
   try {
     await pool.query("BEGIN");
 
+    // Dokümanın mevcut verilerini al
     const result = await pool.query(
       `SELECT * FROM dokuman WHERE id = $1 AND is_deleted = false`, [id]
     );
@@ -100,19 +82,19 @@ const updateDocument = async (req, res) => {
       const doc = result.rows[0];
       const previousDoc = { ...doc };
 
-      // Eski dosyanın içeriğini oku
-      let fileContent = null;
-      if (doc.url) {
-        const filePath = path.join(__dirname, '../uploads', path.basename(doc.url));
-        fileContent = fs.readFileSync(filePath, 'utf8');
-      }
-      
-      // Eski dokümanı revizyon tablosuna ekle
+      // JSONB olarak eski dokümanı kaydet
       await pool.query(
         `INSERT INTO revizyon (sebep, onceki_dokuman, dokuman_id) 
          VALUES ('Doküman güncellendi', $1, $2)`,
-        [JSON.stringify({ ...previousDoc, file_content: fileContent }), id]
+        [JSON.stringify(previousDoc), id]
       );
+
+      // DOCX dosyasının içeriğini okuma
+      let fileContent = null;
+      if (filename) {
+        const filePath = path.join(__dirname, '../uploads', filename);
+        fileContent = await readDocxFile(filePath);
+      }
 
       // Dokümanı güncelle
       const updatedDoc = await pool.query(
@@ -124,7 +106,7 @@ const updateDocument = async (req, res) => {
       );
       
       await pool.query("COMMIT");
-      res.status(200).json(updatedDoc.rows[0]);
+      res.status(200).json({ ...updatedDoc.rows[0], fileContent });
     } else {
       res.status(404).json({ error: "Document not found" });
     }
@@ -135,9 +117,54 @@ const updateDocument = async (req, res) => {
   }
 };
 
+// Doküman alma
+const getDocument = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query(
+      `SELECT * FROM dokuman WHERE id = $1 AND is_deleted = false`, [id]
+    );
+    if (result.rows.length > 0) {
+      const doc = result.rows[0];
+
+      // Revizyon bilgilerini al
+      const revisionResult = await pool.query(
+        `SELECT * FROM revizyon WHERE dokuman_id = $1 ORDER BY created_at DESC`, [id]
+      );
+
+      doc.revizyon = revisionResult.rows;
+      res.status(200).json(doc);
+    } else {
+      res.status(404).json({ error: "Document not found" });
+    }
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
+// Revizyon bilgilerini alma
+const getDocumentRevisions = async (req, res) => {
+    const { id } = req.params;
+    try {
+      const result = await pool.query(
+        `SELECT * FROM revizyon WHERE dokuman_id = $1 ORDER BY created_at DESC`, [id]
+      );
+      if (result.rows.length > 0) {
+        res.status(200).json(result.rows);
+      } else {
+        res.status(404).json({ error: "No revisions found" });
+      }
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Internal Server Error" });
+    }
+  };
+
 module.exports = {
   upload,
   createDocument,
   getDocument,
   updateDocument,
+  getDocumentRevisions
 };

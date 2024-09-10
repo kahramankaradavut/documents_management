@@ -1,9 +1,9 @@
 const pool = require('../db');
 const multer = require('multer');
 const path = require('path');
-const { readDocxFile } = require('../docxHelper'); // Dokx içeriği okuma yardımcı fonksiyonunu ekleyin
+const { readDocxFile } = require('../docxHelper'); 
 
-// Multer ayarları
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, "uploads/");
@@ -82,12 +82,26 @@ const updateDocument = async (req, res) => {
       const doc = result.rows[0];
       const previousDoc = { ...doc };
 
-      // JSONB olarak eski dokümanı kaydet
+      // Eski dosyanın içeriğini okuma
+      let previousFileContent = null;
+      if (doc.url) {
+        const previousFilePath = path.join(__dirname, '../uploads', path.basename(doc.url));
+        previousFileContent = await readDocxFile(previousFilePath);
+      }
+
       await pool.query(
         `INSERT INTO revizyon (sebep, onceki_dokuman, dokuman_id) 
-         VALUES ('Doküman güncellendi', $1, $2)`,
-        [JSON.stringify(previousDoc), id]
+         VALUES ($1, $2, $3)`,
+        ['Doküman güncellendi', previousFileContent, id]
       );
+
+      // Yeni dosya içeriğini oku
+      let newFileContent = null;
+      if (filename) {
+        const newFilePath = path.join(__dirname, '../uploads', filename);
+        newFileContent = await readDocxFile(newFilePath);
+      }
+
 
       // DOCX dosyasının içeriğini okuma
       let fileContent = null;
@@ -106,7 +120,7 @@ const updateDocument = async (req, res) => {
       );
       
       await pool.query("COMMIT");
-      res.status(200).json({ ...updatedDoc.rows[0], fileContent });
+      res.status(200).json({ ...updatedDoc.rows[0], newFileContent });
     } else {
       res.status(404).json({ error: "Document not found" });
     }
